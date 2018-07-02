@@ -1,0 +1,191 @@
+import discord
+import datetime
+from selenium import webdriver
+from discord.ext import commands
+from time import sleep
+from pyvirtualdisplay import Display
+
+try:  # check if BeautifulSoup4 is installed
+    from bs4 import BeautifulSoup
+
+    soupAvailable = True
+except:
+    soupAvailable = False
+
+
+class Match:
+    def __init__(self, home_team, home_team_abbrev, away_team, away_team_abbrev, match_date, match_time, match_url):
+        self.home_team = home_team
+        self.home_team_abbrev = home_team_abbrev
+        self.away_team = away_team
+        self.away_team_abbrev = away_team_abbrev
+        self.match_date = match_date
+        self.match_url = 'https://overwatchleague.com/en-us' + match_url
+        if match_time is not None:
+            self.match_time = match_time
+        else:
+            self.match_time = 'Match Finished'
+
+    def getLongText(self):
+        return self.match_date + ' ' + self.match_time + ' ' + self.home_team + ' vs ' + self.away_team
+
+    def getShortText(self):
+        return self.home_team_abbrev + ' vs ' + self.away_team_abbrev
+
+    def getMarkDownURL(self):
+        return '[' + self.getLongText() + '](' + self.match_url + ')'
+
+    def isToday(self):
+        return self.match_date == 'Today'
+
+
+class OWL:
+
+    def __init__(self, bot):
+        self.bot = bot
+
+    def getMatchList(self):
+        match_url = 'https://overwatchleague.com/en-us/schedule'
+        display = Display(visible=0, size=(1920, 1080)).start()  # this is needed for a headless machine
+        browser = webdriver.Chrome()
+        browser.get(match_url)
+        sleep(5)  # sleeping for 5s to give js time to render
+        html = browser.execute_script("return document.getElementsByClassName('ScheduleMatchList')[0].innerHTML")
+        soup = BeautifulSoup(html, "html.parser")
+        browser.close()
+        matchList = []
+        for matchSchedule in soup.find_all(class_='MatchSchedule'):
+            if matchSchedule.find(class_='MatchRow-day') is None:
+                match_date = matchSchedule.find(class_='Date-dayOfWeek').get_text() + ' ' + matchSchedule.find(
+                    class_='Date-monthAndDay').get_text()
+            else:
+                match_date = matchSchedule.find(class_='MatchRow-day').get_text()
+
+            match_times = matchSchedule.find_all(class_='MatchStatus')
+            match_urls = matchSchedule.find_all('a', attrs={
+                'class': 'MatchRow-contentWrapper MatchRow-contentWrapper--hover'})
+            home_teams = matchSchedule.find_all(class_='TeamLabel-name hidden-sm hidden-xs')[
+                         0::2]  # home teams are even
+            home_team_abbrevs = matchSchedule.find_all(class_='TeamLabel-name hidden-md hidden-lg')[0::2]
+            away_teams = matchSchedule.find_all(class_='TeamLabel-name hidden-sm hidden-xs')[1::2]  # away teams are odd
+            away_team_abbrevs = matchSchedule.find_all(class_='TeamLabel-name hidden-md hidden-lg')[1::2]
+
+            for i in range(
+                    len(match_times)):  # there should only ever be one match time, for 2 teams, so this should be fine
+                matchList.append(
+                    Match(home_teams[i].get_text(), home_team_abbrevs[i].get_text(), away_teams[i].get_text(),
+                          away_team_abbrevs[i].get_text(), match_date, match_times[i].get_text(),
+                          match_urls[i].get('href')))
+        return matchList
+
+    def getMatchListText(self):
+        text = ''
+        for match in self.getMatchList():
+            text += match.getLongText() + '\r\n'
+        return text
+
+    def getStandingsText(self):
+        standings_url = 'https://overwatchleague.com/en-us/standings'
+        display = Display(visible=0, size=(1920, 1080)).start()
+        browser = webdriver.Chrome()  # replace with .Firefox(), or with the browser of your choice
+        browser.get(standings_url)
+        sleep(5)
+        html = browser.execute_script("return document.getElementById('standings').innerHTML")
+        browser.close()
+        soup = BeautifulSoup(html, "html.parser")
+        for abbrev in soup.find_all(
+                class_='IconLabel-item hidden-sm hidden-md hidden-lg hidden-xl'):  # remove the 3 digit team abbreviations from the html. Probably a more elegant way to accomplish this
+            abbrev.extract()
+        # for fullName in soup.find_all(class_='IconLabel-item hidden-xs'):
+        #    fullName.extract()
+        table = soup.find('table', attrs={
+            'class': 'table table-striped table-condensed u-verticalPadding--x-small ScrollArea-content'})
+        # iterate over each row in the table, then over each column in said row
+        rows = table.find('tbody').find_all('tr')
+        rankSpacing, teamSpacing, divisionSpacing, wonSpacing, lostSpacing = 6, 24, 10, 6, 6  # these are just what I chose to make the output look decent
+        # using left justification for simplicity, would prefer to find a way to use center
+        text = 'Rank'.ljust(rankSpacing, ' ') + 'Team'.ljust(teamSpacing, ' ') + 'Division'.ljust(divisionSpacing,
+                                                                                                  ' ') + 'Won'.ljust(
+            wonSpacing, ' ') + 'Lost\r\n'.ljust(lostSpacing, ' ')
+        for row in rows:
+            cols = row.find_all('td')
+            i = 0
+            for ele in cols:
+                eleText = ele.get_text()
+                # I think this could be shortened using dictionaries
+                if i == 0:
+                    while len(eleText) < rankSpacing:
+                        eleText += ' '
+                elif i == 1:
+                    while len(eleText) < teamSpacing:
+                        eleText += ' '
+                elif i == 2:
+                    while len(eleText) < divisionSpacing:
+                        eleText += ' '
+                elif i == 3:
+                    while len(eleText) < wonSpacing:
+                        eleText += ' '
+                elif i == 4:
+                    while len(eleText) < lostSpacing:
+                        eleText += ' '
+                i += 1
+                text += eleText
+            text += '\r\n'
+        return text
+
+    @commands.group()
+    async def owl(self):
+        return
+
+    @owl.command()
+    async def help(self):
+        text = '!owl sched - lists current weeks OWL schedule\r\n'
+        text += '!owl today - lists OWL matches scheduled for today\r\n'
+        text += '!owl standings - lists current OWL standings\r\n'
+        await self.bot.say('```' + text + '```')
+
+    @owl.command()
+    async def sched(self):
+        await self.bot.say('Hold on while I look that up')
+        # author = ctx.message.author
+        embed = discord.Embed(colour=0xFF0000, description='')  # Can use discord.Colour()
+        embed.title = "OWL matches this week"
+        # embed.set_author(name=str(author.name), icon_url=author.avatar_url)
+        # embed.add_field(name=field_name, value=field_contents)  # Can add multiple fields.
+        embed.set_footer(text='https://overwatchleague.com/en-us/schedule')
+        for match in self.getMatchList():
+            embed.add_field(name=match.getShortText(), value=match.getMarkDownURL())
+            # embed.add_field(name='Name', value=value)  # Can add multiple fields.
+        await self.bot.say(embed=embed)
+
+    @owl.command()
+    async def standings(self):
+        await self.bot.say('Hold on while I look that up')
+        await self.bot.say('```' + self.getStandingsText() + '```')
+
+    @owl.command()
+    async def today(self):
+        await self.bot.say('Hold on while I look that up')
+        noMatchesToday = True
+        # author = ctx.message.author
+        embed = discord.Embed(colour=0xFF0000, description='')  # Can use discord.Colour()
+        embed.title = "OWL matches Today"
+        # embed.set_author(name=str(author.name), icon_url=author.avatar_url)
+        # embed.add_field(name=field_name, value=field_contents)  # Can add multiple fields.
+        embed.set_footer(text='https://overwatchleague.com/en-us/schedule')
+        for match in self.getMatchList():
+            if match.isToday():
+                embed.add_field(name=match.getShortText(), value=match.getMarkDownURL())
+                noMatchesToday = False
+            # embed.add_field(name='Name', value=value)  # Can add multiple fields.
+        if noMatchesToday:
+            await self.bot.say('No OWL matches today')
+        else:
+            await self.bot.say(embed=embed)
+
+
+def setup(bot):
+    if soupAvailable:
+        bot.add_cog(OWL(bot))
+    else:
+        raise RuntimeError("You need to run `pip3 install beautifulsoup4`")
